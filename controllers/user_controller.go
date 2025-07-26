@@ -3,7 +3,7 @@ package controllers
 import (
 	"context"
 	"fmt"
-	"os"
+	"strings"
 	"time"
 
 	"backend/config"
@@ -225,77 +225,87 @@ func UploadProfileImage(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "No file provided or invalid file"})
 	}
 
-	// Create uploads directory if it doesn't exist
-	uploadDir := "./uploads"
-	if _, err := os.Stat(uploadDir); os.IsNotExist(err) {
-		err = os.MkdirAll(uploadDir, 0755)
-		if err != nil {
-			return c.Status(500).JSON(fiber.Map{"error": "Failed to create uploads directory"})
+	// Initialize Cloudinary service
+	cloudinaryService, err := utils.NewCloudinaryService()
+	if err != nil {
+		fmt.Printf("Cloudinary init error: %v\n", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to initialize upload service"})
+	}
+
+	// Get current user's profile to delete old image if exists
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var currentUser models.User
+	var oldImageURL string
+
+	// Try to find user and get current profile image
+	objectID, err := primitive.ObjectIDFromHex(userID)
+	if err == nil {
+		err = config.UserCollectionRef.FindOne(ctx, bson.M{"_id": objectID}).Decode(&currentUser)
+		if err == nil {
+			oldImageURL = currentUser.ProfileImage
+		}
+	} else {
+		err = config.UserCollectionRef.FindOne(ctx, bson.M{"_id": userID}).Decode(&currentUser)
+		if err == nil {
+			oldImageURL = currentUser.ProfileImage
 		}
 	}
 
-	// Generate file name with timestamp to avoid duplicates
-	timeStamp := time.Now().UnixNano()
-	fileName := fmt.Sprintf("%d_%s", timeStamp, file.Filename)
-	filePath := fmt.Sprintf("%s/%s", uploadDir, fileName)
-
-	// Save the file
-	if err := c.SaveFile(file, filePath); err != nil {
-		fmt.Println("Error saving file:", err)
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to save the file"})
+	// Upload new image to Cloudinary
+	imageURL, err := cloudinaryService.UploadProfileImage(file, userID)
+	if err != nil {
+		fmt.Printf("Cloudinary upload error: %v\n", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to upload image: " + err.Error()})
 	}
 
-	// Create image URL - PENTING: path harus mulai dengan '/'
-	imageURL := fmt.Sprintf("/uploads/%s", fileName)
-	fmt.Println("Image saved at:", imageURL)
+	fmt.Println("Image uploaded to Cloudinary:", imageURL)
 
 	// Update user profile in database
 	var result *mongo.UpdateResult
 	var updateErr error
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 
 	// Try with ObjectID first
-	objectID, err := primitive.ObjectIDFromHex(userID)
-	if err == nil {
-		// Valid ObjectID
+	if objectID, err := primitive.ObjectIDFromHex(userID); err == nil {
 		result, updateErr = config.UserCollectionRef.UpdateOne(
 			ctx,
 			bson.M{"_id": objectID},
 			bson.M{"$set": bson.M{"profileImage": imageURL}},
 		)
-
-		if updateErr == nil && result.MatchedCount > 0 {
-			fmt.Println("Updated with ObjectID successfully:", result)
-			return c.JSON(fiber.Map{
-				"message":  "Image uploaded successfully",
-				"imageUrl": imageURL,
-			})
-		}
+	} else {
+		// Fall back to string ID
+		result, updateErr = config.UserCollectionRef.UpdateOne(
+			ctx,
+			bson.M{"_id": userID},
+			bson.M{"$set": bson.M{"profileImage": imageURL}},
+		)
 	}
 
-	// Fall back to string ID
-	result, updateErr = config.UserCollectionRef.UpdateOne(
-		ctx,
-		bson.M{"_id": userID},
-		bson.M{"$set": bson.M{"profileImage": imageURL}},
-	)
-
 	if updateErr != nil {
-		// Clean up file on error
-		os.Remove(filePath)
 		fmt.Println("Error updating profile:", updateErr)
+		// Try to delete the uploaded image since DB update failed
+		cloudinaryService.DeleteProfileImage(imageURL)
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to update profile"})
 	}
 
 	if result.MatchedCount == 0 {
-		// No document matched, clean up file
-		os.Remove(filePath)
 		fmt.Println("No user found with ID:", userID)
+		// Try to delete the uploaded image since user not found
+		cloudinaryService.DeleteProfileImage(imageURL)
 		return c.Status(404).JSON(fiber.Map{"error": "User not found"})
 	}
 
-	fmt.Println("Update successful with string ID:", result)
+	// Delete old image from Cloudinary if it exists and is a Cloudinary URL
+	if oldImageURL != "" && strings.Contains(oldImageURL, "cloudinary.com") {
+		err := cloudinaryService.DeleteProfileImage(oldImageURL)
+		if err != nil {
+			fmt.Printf("Warning: Failed to delete old image: %v\n", err)
+			// Don't fail the request if old image deletion fails
+		}
+	}
+
+	fmt.Println("Profile updated successfully:", result)
 
 	return c.JSON(fiber.Map{
 		"message":  "Image uploaded successfully",
