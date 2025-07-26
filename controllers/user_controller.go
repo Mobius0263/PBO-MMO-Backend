@@ -3,7 +3,7 @@ package controllers
 import (
 	"context"
 	"fmt"
-	"strings"
+	"os"
 	"time"
 
 	"backend/config"
@@ -168,13 +168,37 @@ func CreateUser(c *fiber.Ctx) error {
 // GetUserById returns user information by ID
 func GetUserById(c *fiber.Ctx) error {
 	userID := c.Params("id")
+	fmt.Println("Looking up user with ID:", userID)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	var user models.User
-	err := config.UserCollectionRef.FindOne(ctx, bson.M{"_id": userID}).Decode(&user)
+	var err error
+
+	// Coba dengan ObjectID terlebih dahulu
+	objectID, objErr := primitive.ObjectIDFromHex(userID)
+	if objErr == nil {
+		err = config.UserCollectionRef.FindOne(ctx, bson.M{"_id": objectID}).Decode(&user)
+		if err == nil {
+			// User ditemukan dengan ObjectID
+			userResponse := models.UserResponse{
+				ID:           user.ID,
+				Nama:         user.Nama,
+				Email:        user.Email,
+				Role:         user.Role,
+				Bio:          user.Bio,
+				ProfileImage: user.ProfileImage,
+			}
+			fmt.Println("User found with ObjectID:", userID)
+			return c.JSON(userResponse)
+		}
+	}
+
+	// Jika tidak ditemukan dengan ObjectID, coba dengan string ID
+	err = config.UserCollectionRef.FindOne(ctx, bson.M{"_id": userID}).Decode(&user)
 	if err != nil {
+		fmt.Println("User not found with ID:", userID, "Error:", err)
 		return c.Status(404).JSON(fiber.Map{"error": "User not found"})
 	}
 
@@ -188,6 +212,7 @@ func GetUserById(c *fiber.Ctx) error {
 		ProfileImage: user.ProfileImage,
 	}
 
+	fmt.Println("User found with string ID:", userID)
 	return c.JSON(userResponse)
 }
 
@@ -205,11 +230,6 @@ func GetUserById(c *fiber.Ctx) error {
 //	@Failure		500		{object}	map[string]string		"Internal server error"
 //	@Router			/api/upload-profile-image [post]
 func UploadProfileImage(c *fiber.Ctx) error {
-	// Debug CORS headers
-	fmt.Printf("Origin: %s\n", c.Get("Origin"))
-	fmt.Printf("Content-Type: %s\n", c.Get("Content-Type"))
-	fmt.Printf("Method: %s\n", c.Method())
-
 	// Get user ID from JWT token
 	userClaims, ok := c.Locals("user").(jwt.MapClaims)
 	if !ok {
@@ -230,87 +250,77 @@ func UploadProfileImage(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "No file provided or invalid file"})
 	}
 
-	// Initialize Cloudinary service
-	cloudinaryService, err := utils.NewCloudinaryService()
-	if err != nil {
-		fmt.Printf("Cloudinary init error: %v\n", err)
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to initialize upload service"})
-	}
-
-	// Get current user's profile to delete old image if exists
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	var currentUser models.User
-	var oldImageURL string
-
-	// Try to find user and get current profile image
-	objectID, err := primitive.ObjectIDFromHex(userID)
-	if err == nil {
-		err = config.UserCollectionRef.FindOne(ctx, bson.M{"_id": objectID}).Decode(&currentUser)
-		if err == nil {
-			oldImageURL = currentUser.ProfileImage
-		}
-	} else {
-		err = config.UserCollectionRef.FindOne(ctx, bson.M{"_id": userID}).Decode(&currentUser)
-		if err == nil {
-			oldImageURL = currentUser.ProfileImage
+	// Create uploads directory if it doesn't exist
+	uploadDir := "./uploads"
+	if _, err := os.Stat(uploadDir); os.IsNotExist(err) {
+		err = os.MkdirAll(uploadDir, 0755)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "Failed to create uploads directory"})
 		}
 	}
 
-	// Upload new image to Cloudinary
-	imageURL, err := cloudinaryService.UploadProfileImage(file, userID)
-	if err != nil {
-		fmt.Printf("Cloudinary upload error: %v\n", err)
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to upload image: " + err.Error()})
+	// Generate file name with timestamp to avoid duplicates
+	timeStamp := time.Now().UnixNano()
+	fileName := fmt.Sprintf("%d_%s", timeStamp, file.Filename)
+	filePath := fmt.Sprintf("%s/%s", uploadDir, fileName)
+
+	// Save the file
+	if err := c.SaveFile(file, filePath); err != nil {
+		fmt.Println("Error saving file:", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to save the file"})
 	}
 
-	fmt.Println("Image uploaded to Cloudinary:", imageURL)
+	// Create image URL - PENTING: path harus mulai dengan '/'
+	imageURL := fmt.Sprintf("/uploads/%s", fileName)
+	fmt.Println("Image saved at:", imageURL)
 
 	// Update user profile in database
 	var result *mongo.UpdateResult
 	var updateErr error
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
 	// Try with ObjectID first
-	if objectID, err := primitive.ObjectIDFromHex(userID); err == nil {
+	objectID, err := primitive.ObjectIDFromHex(userID)
+	if err == nil {
+		// Valid ObjectID
 		result, updateErr = config.UserCollectionRef.UpdateOne(
 			ctx,
 			bson.M{"_id": objectID},
 			bson.M{"$set": bson.M{"profileImage": imageURL}},
 		)
-	} else {
-		// Fall back to string ID
-		result, updateErr = config.UserCollectionRef.UpdateOne(
-			ctx,
-			bson.M{"_id": userID},
-			bson.M{"$set": bson.M{"profileImage": imageURL}},
-		)
+
+		if updateErr == nil && result.MatchedCount > 0 {
+			fmt.Println("Updated with ObjectID successfully:", result)
+			return c.JSON(fiber.Map{
+				"message":  "Image uploaded successfully",
+				"imageUrl": imageURL,
+			})
+		}
 	}
 
+	// Fall back to string ID
+	result, updateErr = config.UserCollectionRef.UpdateOne(
+		ctx,
+		bson.M{"_id": userID},
+		bson.M{"$set": bson.M{"profileImage": imageURL}},
+	)
+
 	if updateErr != nil {
+		// Clean up file on error
+		os.Remove(filePath)
 		fmt.Println("Error updating profile:", updateErr)
-		// Try to delete the uploaded image since DB update failed
-		cloudinaryService.DeleteProfileImage(imageURL)
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to update profile"})
 	}
 
 	if result.MatchedCount == 0 {
+		// No document matched, clean up file
+		os.Remove(filePath)
 		fmt.Println("No user found with ID:", userID)
-		// Try to delete the uploaded image since user not found
-		cloudinaryService.DeleteProfileImage(imageURL)
 		return c.Status(404).JSON(fiber.Map{"error": "User not found"})
 	}
 
-	// Delete old image from Cloudinary if it exists and is a Cloudinary URL
-	if oldImageURL != "" && strings.Contains(oldImageURL, "cloudinary.com") {
-		err := cloudinaryService.DeleteProfileImage(oldImageURL)
-		if err != nil {
-			fmt.Printf("Warning: Failed to delete old image: %v\n", err)
-			// Don't fail the request if old image deletion fails
-		}
-	}
-
-	fmt.Println("Profile updated successfully:", result)
+	fmt.Println("Update successful with string ID:", result)
 
 	return c.JSON(fiber.Map{
 		"message":  "Image uploaded successfully",
@@ -462,26 +472,72 @@ func UpdateUser(c *fiber.Ctx) error {
 //	@Security		Bearer
 //	@Param			id	path		string				true	"User ID"
 //	@Success		200	{object}	map[string]string	"User deleted successfully"
+//	@Failure		400	{object}	map[string]string	"Bad request - Cannot delete self"
+//	@Failure		403	{object}	map[string]string	"Forbidden - Admin role required"
 //	@Failure		404	{object}	map[string]string	"User not found"
 //	@Failure		500	{object}	map[string]string	"Internal server error"
 //	@Router			/api/users/{id} [delete]
 func DeleteUser(c *fiber.Ctx) error {
-	userID := c.Params("id")
-	fmt.Println("Deleting user with ID:", userID)
+	// Get token user information
+	userClaims, ok := c.Locals("user").(jwt.MapClaims)
+	if !ok {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to parse user claims"})
+	}
 
+	// Get admin user's ID
+	adminID, ok := userClaims["id"].(string)
+	if !ok {
+		return c.Status(500).JSON(fiber.Map{"error": "Invalid user ID in token"})
+	}
+
+	// Get admin user's role from database to verify they're admin
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	var adminUser models.User
+
+	// Try getting admin user with ObjectID first
+	adminObjectID, err := primitive.ObjectIDFromHex(adminID)
+	if err == nil {
+		err = config.UserCollectionRef.FindOne(ctx, bson.M{"_id": adminObjectID}).Decode(&adminUser)
+		if err != nil {
+			// Try with string ID
+			err = config.UserCollectionRef.FindOne(ctx, bson.M{"_id": adminID}).Decode(&adminUser)
+		}
+	} else {
+		// Try with string ID
+		err = config.UserCollectionRef.FindOne(ctx, bson.M{"_id": adminID}).Decode(&adminUser)
+	}
+
+	if err != nil {
+		fmt.Println("Error finding admin user:", err)
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to verify admin credentials"})
+	}
+
+	// Check if user is admin
+	if adminUser.Role != "Admin" {
+		fmt.Println("User tried to delete but doesn't have admin role:", adminUser.Role)
+		return c.Status(403).JSON(fiber.Map{"error": "Admin role required to delete users"})
+	}
+
+	// Get target user ID to delete
+	userID := c.Params("id")
+	fmt.Println("Attempting to delete user with ID:", userID)
+
+	// Prevent admin from deleting themselves
+	if userID == adminID {
+		return c.Status(400).JSON(fiber.Map{"error": "Cannot delete your own account"})
+	}
+
 	var deleteResult *mongo.DeleteResult
-	var err error
 
 	// Try with ObjectID first
 	objectID, err := primitive.ObjectIDFromHex(userID)
 	if err == nil {
 		deleteResult, err = config.UserCollectionRef.DeleteOne(ctx, bson.M{"_id": objectID})
 		if err == nil && deleteResult.DeletedCount > 0 {
-			fmt.Println("Deleted with ObjectID successfully")
-			return c.Status(200).JSON(fiber.Map{"message": "User deleted successfully"})
+			fmt.Println("Deleted user with ObjectID successfully")
+			return c.JSON(fiber.Map{"message": "User deleted successfully"})
 		}
 	}
 
@@ -493,9 +549,10 @@ func DeleteUser(c *fiber.Ctx) error {
 	}
 
 	if deleteResult.DeletedCount == 0 {
+		fmt.Println("No user found with ID:", userID)
 		return c.Status(404).JSON(fiber.Map{"error": "User not found"})
 	}
 
-	fmt.Println("Deleted with string ID successfully")
-	return c.Status(200).JSON(fiber.Map{"message": "User deleted successfully"})
+	fmt.Println("Deleted user with string ID successfully")
+	return c.JSON(fiber.Map{"message": "User deleted successfully"})
 }
