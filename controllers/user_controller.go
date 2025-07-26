@@ -205,6 +205,11 @@ func GetUserById(c *fiber.Ctx) error {
 //	@Failure		500		{object}	map[string]string		"Internal server error"
 //	@Router			/api/upload-profile-image [post]
 func UploadProfileImage(c *fiber.Ctx) error {
+	// Debug CORS headers
+	fmt.Printf("Origin: %s\n", c.Get("Origin"))
+	fmt.Printf("Content-Type: %s\n", c.Get("Content-Type"))
+	fmt.Printf("Method: %s\n", c.Method())
+
 	// Get user ID from JWT token
 	userClaims, ok := c.Locals("user").(jwt.MapClaims)
 	if !ok {

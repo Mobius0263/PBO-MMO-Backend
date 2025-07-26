@@ -52,6 +52,16 @@ func main() {
 		log.Println("⚠️ JWT_SECRET not set in environment variables, using default (insecure for production)")
 	}
 
+	// Set up CORS origins based on environment
+	corsOrigins := "http://localhost:5173,http://localhost:5174"
+	if prodOrigins := os.Getenv("CORS_ORIGINS"); prodOrigins != "" {
+		corsOrigins = prodOrigins
+	} else {
+		// Add production origins
+		corsOrigins += ",https://pbo-meet-up.vercel.app"
+	}
+	log.Printf("🌐 CORS Origins: %s", corsOrigins)
+
 	app := fiber.New(fiber.Config{
 		ErrorHandler: func(c *fiber.Ctx, err error) error {
 			// Log error secara detail
@@ -71,13 +81,14 @@ func main() {
 		},
 	})
 
-	// Konfigurasi CORS yang benar
+	// Konfigurasi CORS yang benar untuk file uploads
 	app.Use(cors.New(cors.Config{
-		AllowOrigins:     "http://localhost:5173,http://localhost:5174,https://pbo-meet-up.vercel.app",
-		AllowMethods:     "GET,POST,PUT,DELETE,OPTIONS",
-		AllowHeaders:     "Origin, Content-Type, Accept, Authorization",
+		AllowOrigins:     corsOrigins,
+		AllowMethods:     "GET,POST,PUT,DELETE,OPTIONS,PATCH",
+		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, X-Requested-With, Content-Length, Accept-Encoding, X-CSRF-Token, X-File-Name, Cache-Control",
 		AllowCredentials: true,
 		ExposeHeaders:    "Content-Length, Content-Disposition",
+		MaxAge:          86400, // Cache preflight for 24 hours
 	}))
 
 	// Add Logger middleware
