@@ -73,7 +73,7 @@ func main() {
 
 	// Konfigurasi CORS yang benar
 	app.Use(cors.New(cors.Config{
-		AllowOrigins:     "http://localhost:5173,http://localhost:5174", // Allow both ports
+		AllowOrigins:     "http://localhost:5173,http://localhost:5174,https://pbo-meet-up.vercel.app",
 		AllowMethods:     "GET,POST,PUT,DELETE,OPTIONS",
 		AllowHeaders:     "Origin, Content-Type, Accept, Authorization",
 		AllowCredentials: true,
