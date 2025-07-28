@@ -29,7 +29,7 @@ import (
 
 //	@host		localhost:8080
 //	@BasePath	/
-//	@schemes	http
+//	@schemes	http https
 
 //	@securityDefinitions.apikey	Bearer
 //	@in							header
@@ -88,7 +88,7 @@ func main() {
 		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, X-Requested-With, Content-Length, Accept-Encoding, X-CSRF-Token, X-File-Name, Cache-Control",
 		AllowCredentials: true,
 		ExposeHeaders:    "Content-Length, Content-Disposition",
-		MaxAge:          86400, // Cache preflight for 24 hours
+		MaxAge:           86400, // Cache preflight for 24 hours
 	}))
 
 	// Add Logger middleware

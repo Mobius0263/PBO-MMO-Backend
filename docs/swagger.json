@@ -604,6 +604,24 @@
                             }
                         }
                     },
+                    "400": {
+                        "description": "Bad request - Cannot delete self",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden - Admin role required",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "404": {
                         "description": "User not found",
                         "schema": {

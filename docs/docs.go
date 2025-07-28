@@ -606,6 +606,24 @@ const docTemplate = `{
                             }
                         }
                     },
+                    "400": {
+                        "description": "Bad request - Cannot delete self",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden - Admin role required",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "404": {
                         "description": "User not found",
                         "schema": {
@@ -1056,7 +1074,7 @@ var SwaggerInfo = &swag.Spec{
 	Version:          "1.0",
 	Host:             "localhost:8080",
 	BasePath:         "/",
-	Schemes:          []string{"http"},
+	Schemes:          []string{"http", "https"},
 	Title:            "CoEmotion API",
 	Description:      "This is the API documentation for CoEmotion meeting management system",
 	InfoInstanceName: "swagger",
