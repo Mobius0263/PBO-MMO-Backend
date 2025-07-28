@@ -27,6 +27,7 @@ import (
 //	@license.name	MIT
 //	@license.url	https://opensource.org/licenses/MIT
 
+//	@host		localhost:8080
 //	@BasePath	/
 //	@schemes	http https
 
@@ -44,6 +45,11 @@ func main() {
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
+	}
+
+	httpsPort := os.Getenv("HTTPS_PORT")
+	if httpsPort == "" {
+		httpsPort = "8443"
 	}
 
 	// Check if JWT_SECRET is set
@@ -103,7 +109,36 @@ func main() {
 	// Setup routes
 	routes.SetupRoutes(app)
 
-	// Start server (supports both HTTP and HTTPS schemes in Swagger)
+	// Check if SSL certificates exist
+	if _, err := os.Stat("certs/localhost.crt"); err == nil {
+		if _, err := os.Stat("certs/localhost.key"); err == nil {
+			// Start both HTTP and HTTPS servers
+			go func() {
+				log.Printf("🚀 HTTP Server running at http://localhost:%s", port)
+				if err := app.Listen(":" + port); err != nil {
+					log.Printf("❌ Failed to start HTTP server: %v", err)
+				}
+			}()
+
+			log.Printf("🔒 HTTPS Server running at https://localhost:%s", httpsPort)
+			log.Printf("📚 Swagger documentation: https://localhost:%s/swagger/index.html", httpsPort)
+			log.Println("⚠️ Using self-signed certificate. Browser will show security warning.")
+			
+			if err := app.ListenTLS(":"+httpsPort, "certs/localhost.crt", "certs/localhost.key"); err != nil {
+				log.Fatal("❌ Failed to start HTTPS server:", err)
+			}
+		} else {
+			log.Println("⚠️ SSL private key not found. Running HTTP only.")
+			startHTTPOnly(app, port)
+		}
+	} else {
+		log.Println("⚠️ SSL certificate not found. Running HTTP only.")
+		log.Println("💡 Run 'generate-cert.bat' to create SSL certificates for HTTPS support.")
+		startHTTPOnly(app, port)
+	}
+}
+
+func startHTTPOnly(app *fiber.App, port string) {
 	log.Printf("🚀 Server running at http://localhost:%s", port)
 	log.Printf("📚 Swagger documentation: http://localhost:%s/swagger/index.html", port)
 	log.Println("💡 Note: HTTPS scheme in Swagger is for production deployment with proper SSL certificates")
